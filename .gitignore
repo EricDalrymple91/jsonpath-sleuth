@@ -9,3 +9,30 @@ __pycache__/
 .vscode/
 .vs/
 /.mypy_cache/
+
+# Python virtual environments
+.venv/
+venv/
+
+# Pytest cache
+/.pytest_cache/
+
+# Rust build artifacts
+/target/
+
+# Maturin/Python build output
+/dist/
+/build/
+
+# Coverage artifacts
+/.coverage
+/.coverage.*
+/htmlcov/
+/coverage.xml
+
+# Python packaging metadata
+/*.egg-info/
+/*.dist-info/
+
+# Ruff
+/.ruff_cache/
