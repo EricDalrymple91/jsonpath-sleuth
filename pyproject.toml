@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "jsonpath-sleuth"
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.8"
 description = "Python bindings for fast JSONPath resolve and value-to-path search implemented in Rust"
 readme = "README.md"
@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Rust",
   "Operating System :: OS Independent",
   "License :: OSI Approved :: MIT License",
