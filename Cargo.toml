@@ -1,0 +1,19 @@
+[package]
+name = "jsonpath-sleuth"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jsonpath_sleuth"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.27", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+jsonpath_lib = "0.3"
+pythonize = { version = "0.27", optional = true }
+
+[features]
+default = []
+python = ["dep:pyo3", "dep:pythonize", "pyo3/extension-module", "pyo3/abi3-py38"]

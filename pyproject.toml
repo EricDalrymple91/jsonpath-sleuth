@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.6,<2"]
+build-backend = "maturin"
+
+[project]
+name = "jsonpath-sleuth"
+version = "0.1.0"
+requires-python = ">=3.8"
+description = "Python bindings for fast JSONPath resolve and value-to-path search implemented in Rust"
+readme = "README.md"
+authors = [{ name = "Your Name" }]
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+  "License :: OSI Approved :: MIT License",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "maturin>=1.6,<2",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+# Use abi3 for wide wheel compatibility (set in Cargo features too)
