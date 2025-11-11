@@ -39,6 +39,23 @@ Notes
 - Re-run `maturin develop` after Rust changes to refresh the extension in your venv.
 - If pytest cannot import `jsonpath_sleuth`, ensure you activated the same venv used for `maturin develop`.
 
+## Publish
+
+- Build wheels + sdist
+  - `maturin build -m Cargo.toml --features python --release --sdist`
+
+- TestPyPI (requires separate TestPyPI account and token)
+  - Publish: `maturin publish -m Cargo.toml --features python --repository-url https://test.pypi.org/legacy/ -u __token__ -p <pypi-TEST_TOKEN>`
+  - Install to verify: `pip install -i https://test.pypi.org/simple jsonpath-sleuth`
+
+- PyPI
+  - Publish: `maturin publish -m Cargo.toml --features python -u __token__ -p <pypi-PROD_TOKEN>`
+  - Install to verify: `pip install jsonpath-sleuth`
+
+Tips
+- Bump version in both `Cargo.toml` and `pyproject.toml` before publishing a new release.
+- Tokens begin with `pypi-`. Avoid committing tokens; pass on the command line or configure `~/.pypirc`.
+
 ## Python API
 
 Module: `jsonpath_sleuth`
