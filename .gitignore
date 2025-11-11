@@ -1,0 +1,11 @@
+*.pyc
+.DS_Store
+
+# Bytecode
+__pycache__/
+
+# IDE
+.idea
+.vscode/
+.vs/
+/.mypy_cache/
