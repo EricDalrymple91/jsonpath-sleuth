@@ -4,6 +4,7 @@ Fast Python bindings (via Rust + PyO3) for:
 
 - Resolving JSONPath expressions against Python dict/list JSON
 - Finding JSONPath-like paths for all occurrences of a target value
+- Extracting all JSONPath-like paths paired with their leaf values
 
 ## Install / Build
 
@@ -64,11 +65,13 @@ Module: `jsonpath_sleuth`
   - Returns a list of matched values for the given JSONPath. The path may omit the leading `$` (it is added automatically).
 - `find_jsonpaths_by_value(data: dict | list, target: Any) -> list[str]`
   - Returns string paths like `foo.bar[0].baz` where value equals `target`.
+- `extract_jsonpaths_and_values(data: dict | list) -> list[tuple[str, Any]]`
+  - Returns all JSONPath-like paths paired with their leaf values. Paths use `.` for object keys and `[idx]` for arrays.
 
 ## Examples
 
 ```python
-from jsonpath_sleuth import resolve_jsonpath, find_jsonpaths_by_value
+from jsonpath_sleuth import resolve_jsonpath, find_jsonpaths_by_value, extract_jsonpaths_and_values
 
 obj = {
     "store": {
@@ -90,7 +93,19 @@ print(resolve_jsonpath(obj, "$.store.book[*].title"))
 # 2) Find paths by target value
 print(find_jsonpaths_by_value(obj, "fiction"))
 # -> ["store.book[0].category", "store.book[1].category"]
+
+# 3) Extract all leaf paths and values
+print(extract_jsonpaths_and_values(obj))
+# -> [
+#     ("store.book[0].category", "fiction"),
+#     ("store.book[0].title", "Sword"),
+#     ("store.book[1].category", "fiction"),
+#     ("store.book[1].title", "Shield"),
+#     ("store.bicycle.color", "red"),
+#     ("store.bicycle.price", 19.95),
+# ]
 ```
+
 
 ## Notes
 - JSONPath is powered by `jsonpath_lib` crate.
