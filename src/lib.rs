@@ -27,11 +27,6 @@ fn normalize_jsonpath(path: &str) -> String {
 }
 
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
-    if node == target {
-        if !path.is_empty() {
-            out.push(path.clone());
-        }
-    }
     match node {
         Value::Object(map) => {
             for (k, v) in map {
@@ -53,8 +48,53 @@ fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut V
                 path.truncate(orig_len);
             }
         }
-        _ => {}
+        // Only compare equality on non-container (leaf) values to avoid
+        // expensive deep comparisons for every object/array node.
+        _ => {
+            if node == target {
+                if !path.is_empty() {
+                    out.push(path.clone());
+                }
+            }
+        }
     }
+}
+
+#[cfg(feature = "python")]
+fn visit_extract_paths<'py>(
+    py: Python<'py>,
+    node: &Value,
+    path: &mut String,
+    out: &mut Vec<(String, Py<PyAny>)>,
+) -> PyResult<()> {
+    match node {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let orig_len = path.len();
+                if !path.is_empty() {
+                    path.push('.');
+                }
+                path.push_str(k);
+                visit_extract_paths(py, v, path, out)?;
+                path.truncate(orig_len);
+            }
+        }
+        Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                let orig_len = path.len();
+                use std::fmt::Write as _;
+                let _ = write!(path, "[{}]", i);
+                visit_extract_paths(py, v, path, out)?;
+                path.truncate(orig_len);
+            }
+        }
+        _ => {
+            let py_obj = pythonize(py, node)
+                .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
+            out.push((path.clone(), py_obj.into()));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "python")]
@@ -95,10 +135,27 @@ fn find_jsonpaths_by_value(
 }
 
 #[cfg(feature = "python")]
+#[pyfunction(signature = (data, path=""))]
+fn extract_jsonpaths_and_values(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    path: &str,
+) -> PyResult<Vec<(String, Py<PyAny>)>> {
+    let v: Value = depythonize(data)
+        .map_err(|e: pythonize::PythonizeError| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
+
+    let mut out: Vec<(String, Py<PyAny>)> = Vec::new();
+    let mut buf = String::from(path);
+    visit_extract_paths(py, &v, &mut buf, &mut out)?;
+    Ok(out)
+}
+
+#[cfg(feature = "python")]
 #[pymodule]
 fn jsonpath_sleuth(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve_jsonpath, m)?)?;
     m.add_function(wrap_pyfunction!(find_jsonpaths_by_value, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_jsonpaths_and_values, m)?)?;
     Ok(())
 }
 

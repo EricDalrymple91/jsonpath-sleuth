@@ -1,4 +1,8 @@
-from jsonpath_sleuth import resolve_jsonpath, find_jsonpaths_by_value
+from jsonpath_sleuth import (
+    resolve_jsonpath,
+    find_jsonpaths_by_value,
+    extract_jsonpaths_and_values,
+)
 
 
 class TestResolveJSONPath:
@@ -27,9 +31,13 @@ class TestResolveJSONPath:
             }
         }
         # short form (no '$') with filter
-        assert resolve_jsonpath(obj, "store.book[?(@.title == 'Sword')].category") == ["fiction"]
+        assert resolve_jsonpath(obj, "store.book[?(@.title == 'Sword')].category") == [
+            "fiction"
+        ]
         # explicit root
-        assert resolve_jsonpath(obj, "$.store.book[?(@.title == 'Sword')].category") == ["fiction"]
+        assert resolve_jsonpath(
+            obj, "$.store.book[?(@.title == 'Sword')].category"
+        ) == ["fiction"]
 
 
 class TestFindJSONPathsByValue:
@@ -46,3 +54,34 @@ class TestFindJSONPathsByValue:
         paths = find_jsonpaths_by_value(obj, 999)
         assert paths == []
 
+
+class TestExtractJSONPathsAndValues:
+    def test_extract_basic(self) -> None:
+        obj = {
+            "a": {"b": 1, "c": [1, 2]},
+            "d": [{"e": 1}, 2, 1],
+        }
+        pairs = sorted(extract_jsonpaths_and_values(obj))
+        assert pairs == sorted(
+            [
+                ("a.b", 1),
+                ("a.c[0]", 1),
+                ("a.c[1]", 2),
+                ("d[0].e", 1),
+                ("d[1]", 2),
+                ("d[2]", 1),
+            ]
+        )
+
+    def test_extract_scalars(self) -> None:
+        obj = ["x", 10, True, None, 1.5]
+        pairs = sorted(extract_jsonpaths_and_values(obj))
+        assert pairs == sorted(
+            [
+                ("[0]", "x"),
+                ("[1]", 10),
+                ("[2]", True),
+                ("[3]", None),
+                ("[4]", 1.5),
+            ]
+        )
