@@ -60,13 +60,7 @@ fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut V
     }
 }
 
-#[cfg(feature = "python")]
-fn visit_extract_paths<'py>(
-    py: Python<'py>,
-    node: &Value,
-    path: &mut String,
-    out: &mut Vec<(String, Py<PyAny>)>,
-) -> PyResult<()> {
+fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, Value)>) {
     match node {
         Value::Object(map) => {
             for (k, v) in map {
@@ -75,7 +69,7 @@ fn visit_extract_paths<'py>(
                     path.push('.');
                 }
                 path.push_str(k);
-                visit_extract_paths(py, v, path, out)?;
+                visit_extract_pairs(v, path, out);
                 path.truncate(orig_len);
             }
         }
@@ -84,17 +78,14 @@ fn visit_extract_paths<'py>(
                 let orig_len = path.len();
                 use std::fmt::Write as _;
                 let _ = write!(path, "[{}]", i);
-                visit_extract_paths(py, v, path, out)?;
+                visit_extract_pairs(v, path, out);
                 path.truncate(orig_len);
             }
         }
         _ => {
-            let py_obj = pythonize(py, node)
-                .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
-            out.push((path.clone(), py_obj.into()));
+            out.push((path.clone(), node.clone()));
         }
     }
-    Ok(())
 }
 
 #[cfg(feature = "python")]
@@ -144,9 +135,16 @@ fn extract_jsonpaths_and_values(
     let v: Value = depythonize(data)
         .map_err(|e: pythonize::PythonizeError| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
 
-    let mut out: Vec<(String, Py<PyAny>)> = Vec::new();
+    let mut pairs: Vec<(String, Value)> = Vec::new();
     let mut buf = String::from(path);
-    visit_extract_paths(py, &v, &mut buf, &mut out)?;
+    visit_extract_pairs(&v, &mut buf, &mut pairs);
+
+    let mut out: Vec<(String, Py<PyAny>)> = Vec::with_capacity(pairs.len());
+    for (p, val) in pairs {
+        let py_obj = pythonize(py, &val)
+            .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
+        out.push((p, py_obj.into()));
+    }
     Ok(out)
 }
 
@@ -240,4 +238,53 @@ mod tests {
         let got2: Vec<String> = m2.iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert_eq!(got2, vec!["fiction".to_string()]);
     }
+
+    #[test]
+    fn test_extract_jsonpaths_and_values_basic() {
+        let obj = json!({
+            "a": {"b": 1, "c": [1, 2]},
+            "d": [{"e": 1}, 2, 1]
+        });
+        let mut out: Vec<(String, Value)> = Vec::new();
+        let mut buf = String::new();
+        visit_extract_pairs(&obj, &mut buf, &mut out);
+
+        let mut out = out;
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.to_string().cmp(&b.1.to_string())));
+
+        let mut expected: Vec<(String, Value)> = vec![
+            ("a.b".into(), json!(1)),
+            ("a.c[0]".into(), json!(1)),
+            ("a.c[1]".into(), json!(2)),
+            ("d[0].e".into(), json!(1)),
+            ("d[1]".into(), json!(2)),
+            ("d[2]".into(), json!(1)),
+        ];
+        expected.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.to_string().cmp(&b.1.to_string())));
+
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn test_extract_jsonpaths_and_values_scalars() {
+        let obj = json!(["x", 10, true, null, 1.5]);
+        let mut out: Vec<(String, Value)> = Vec::new();
+        let mut buf = String::new();
+        visit_extract_pairs(&obj, &mut buf, &mut out);
+
+        let mut out = out;
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.to_string().cmp(&b.1.to_string())));
+
+        let mut expected: Vec<(String, Value)> = vec![
+            ("[0]".into(), json!("x")),
+            ("[1]".into(), json!(10)),
+            ("[2]".into(), json!(true)),
+            ("[3]".into(), json!(null)),
+            ("[4]".into(), json!(1.5)),
+        ];
+        expected.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.to_string().cmp(&b.1.to_string())));
+
+        assert_eq!(out, expected);
+    }
 }
+
