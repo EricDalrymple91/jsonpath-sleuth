@@ -21,22 +21,17 @@ fn normalize_jsonpath(path: &str) -> String {
 // Fast-path: resolve simple dot-only object keys without arrays or filters
 fn is_simple_dot_path(raw: &str) -> Option<&str> {
     let p = raw.trim();
-    if p.is_empty() { return None; }
-    // Support optional '$.' prefix
-    let p = if let Some(rest) = p.strip_prefix("$.") { rest } else { p };
-    // Reject if any JSONPath operators present
-    if p.chars().any(|c| matches!(c, '$' | '[' | ']' | '*' | '?' | '@' | '"' | '\'')) {
+    if p.is_empty() {
         return None;
     }
-    // Only allow [\w .\-_] (Unicode letters/digits + _, space, -, .)
-    if !p.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.')) {
-        return None;
+    let p = p.strip_prefix("$.").unwrap_or(p);
+    if p.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.'))
+        && !p.split('.').any(|seg| seg.is_empty())
+    {
+        Some(p)
+    } else {
+        None
     }
-    // No empty segments like 'a..b'
-    if p.split('.').any(|seg| seg.is_empty()) {
-        return None;
-    }
-    Some(p)
 }
 
 fn get_by_dot_path<'a>(mut cur: &'a Value, path: &str) -> Option<&'a Value> {
