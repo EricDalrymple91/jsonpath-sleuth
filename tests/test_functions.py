@@ -39,6 +39,20 @@ class TestResolveJSONPath:
             obj, "$.store.book[?(@.title == 'Sword')].category"
         ) == ["fiction"]
 
+    def test_simple_dot_only(self) -> None:
+        obj = {"a": {"b": {"c": 1}}}
+        assert resolve_jsonpath(obj, "a.b.c") == [1]
+        # also supports optional '$.' prefix
+        assert resolve_jsonpath(obj, "$.a.b.c") == [1]
+
+    def test_simple_keys_with_spaces_and_dashes(self) -> None:
+        obj = {"a b": {"c-d_e": {"k": "v"}}}
+        assert resolve_jsonpath(obj, "a b.c-d_e.k") == ["v"]
+
+    def test_simple_missing_key_returns_empty(self) -> None:
+        obj = {"a": {"b": {"c": 1}}}
+        assert resolve_jsonpath(obj, "a.b.x") == []
+
 
 class TestFindJSONPathsByValue:
     def test_multiple_hits(self) -> None:
