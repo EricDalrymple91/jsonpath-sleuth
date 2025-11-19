@@ -26,6 +26,39 @@ fn normalize_jsonpath(path: &str) -> String {
     }
 }
 
+// Fast-path: resolve simple dot-only object keys without arrays or filters
+fn is_simple_dot_path(raw: &str) -> Option<&str> {
+    let p = raw.trim();
+    if p.is_empty() { return None; }
+    // Support optional '$.' prefix
+    let p = if let Some(rest) = p.strip_prefix("$.") { rest } else { p };
+    // Reject if any JSONPath operators present
+    if p.chars().any(|c| matches!(c, '$' | '[' | ']' | '*' | '?' | '@' | '"' | '\'')) {
+        return None;
+    }
+    // Only allow [\w .\-_] (Unicode letters/digits + _, space, -, .)
+    if !p.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.')) {
+        return None;
+    }
+    // No empty segments like 'a..b'
+    if p.split('.').any(|seg| seg.is_empty()) {
+        return None;
+    }
+    Some(p)
+}
+
+fn get_by_dot_path<'a>(mut cur: &'a Value, path: &str) -> Option<&'a Value> {
+    for key in path.split('.') {
+        match cur {
+            Value::Object(map) => {
+                cur = map.get(key)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -93,6 +126,17 @@ fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, V
 fn resolve_jsonpath(py: Python<'_>, data: &Bound<'_, PyAny>, path: &str) -> PyResult<Vec<Py<PyAny>>> {
     let v: Value = depythonize(data)
         .map_err(|e: pythonize::PythonizeError| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
+
+    // Fast-path: simple object key traversal like "a.b.c"
+    if let Some(simple) = is_simple_dot_path(path) {
+        if let Some(val) = get_by_dot_path(&v, simple) {
+            let py_obj = pythonize(py, val)
+                .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
+            return Ok(vec![py_obj.into()]);
+        } else {
+            return Ok(Vec::new());
+        }
+    }
 
     let path = normalize_jsonpath(path);
     let matches = jsonpath_lib::select(&v, &path)
@@ -285,6 +329,30 @@ mod tests {
         expected.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.to_string().cmp(&b.1.to_string())));
 
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn test_is_simple_dot_path_accepts_and_rejects() {
+        assert!(is_simple_dot_path("a.b.c").is_some());
+        assert!(is_simple_dot_path("$.a.b").is_some());
+        assert!(is_simple_dot_path("a b.c-d_e").is_some());
+        // reject operators and arrays
+        assert!(is_simple_dot_path("a.b[0]").is_none());
+        assert!(is_simple_dot_path("store.book[*].title").is_none());
+        assert!(is_simple_dot_path("").is_none());
+        assert!(is_simple_dot_path("a..b").is_none());
+    }
+
+    #[test]
+    fn test_get_by_dot_path_traversal() {
+        let obj = json!({"a": {"b": {"c": 1}, "x": 2}});
+        let v = get_by_dot_path(&obj, "a.b.c");
+        assert_eq!(v, Some(&json!(1)));
+        let missing = get_by_dot_path(&obj, "a.b.missing");
+        assert!(missing.is_none());
+        // stops when encountering non-object
+        let stop = get_by_dot_path(&obj, "a.x.y");
+        assert!(stop.is_none());
     }
 }
 
