@@ -9,20 +9,12 @@ use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
 fn normalize_jsonpath(path: &str) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return "$.".to_string();
-    }
-    if trimmed.starts_with('$') {
-        trimmed.to_string()
-    } else if trimmed.starts_with('.') || trimmed.starts_with('[') {
-        let mut s = String::from("$");
-        s.push_str(trimmed);
-        s
-    } else {
-        let mut s = String::from("$.");
-        s.push_str(trimmed);
-        s
+    let p = path.trim();
+    match p.chars().next() {
+        None => "$.".to_owned(),
+        Some('$') => p.to_owned(),
+        Some('.') | Some('[') => format!("${}", p),
+        _ => format!("$.{}", p),
     }
 }
 
