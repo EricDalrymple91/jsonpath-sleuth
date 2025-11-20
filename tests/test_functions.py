@@ -47,7 +47,8 @@ class TestResolveJSONPath:
 
     def test_simple_keys_with_spaces_and_dashes(self) -> None:
         obj = {"a b": {"c-d_e": {"k": "v"}}}
-        assert resolve_jsonpath(obj, "a b.c-d_e.k") == ["v"]
+        # JSONPath requires quoting keys with spaces/special chars
+        assert resolve_jsonpath(obj, "['a b']['c-d_e'].k") == ["v"]
 
     def test_simple_missing_key_returns_empty(self) -> None:
         obj = {"a": {"b": {"c": 1}}}

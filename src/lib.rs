@@ -18,34 +18,6 @@ fn normalize_jsonpath(path: &str) -> String {
     }
 }
 
-// Fast-path: resolve simple dot-only object keys without arrays or filters
-fn is_simple_dot_path(raw: &str) -> Option<&str> {
-    let p = raw.trim();
-    if p.is_empty() {
-        return None;
-    }
-    let p = p.strip_prefix("$.").unwrap_or(p);
-    if p.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' ' | '.'))
-        && !p.split('.').any(|seg| seg.is_empty())
-    {
-        Some(p)
-    } else {
-        None
-    }
-}
-
-fn get_by_dot_path<'a>(mut cur: &'a Value, path: &str) -> Option<&'a Value> {
-    for key in path.split('.') {
-        match cur {
-            Value::Object(map) => {
-                cur = map.get(key)?;
-            }
-            _ => return None,
-        }
-    }
-    Some(cur)
-}
-
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -113,17 +85,6 @@ fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, V
 fn resolve_jsonpath(py: Python<'_>, data: &Bound<'_, PyAny>, path: &str) -> PyResult<Vec<Py<PyAny>>> {
     let v: Value = depythonize(data)
         .map_err(|e: pythonize::PythonizeError| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
-
-    // Fast-path: simple object key traversal like "a.b.c"
-    if let Some(simple) = is_simple_dot_path(path) {
-        if let Some(val) = get_by_dot_path(&v, simple) {
-            let py_obj = pythonize(py, val)
-                .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
-            return Ok(vec![py_obj.into()]);
-        } else {
-            return Ok(Vec::new());
-        }
-    }
 
     let path = normalize_jsonpath(path);
     let matches = jsonpath_lib::select(&v, &path)
@@ -243,7 +204,7 @@ mod tests {
         assert_eq!(got, vec!["Sword".to_string(), "Shield".to_string()]);
 
         // our normalizer should accept paths without the leading $
-        let m2 = jsonpath_lib::select(&obj, &super::normalize_jsonpath("store.book[*].title")).unwrap();
+        let m2 = jsonpath_lib::select(&obj, &normalize_jsonpath("store.book[*].title")).unwrap();
         let got2: Vec<String> = m2.iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert_eq!(got2, vec!["Sword".to_string(), "Shield".to_string()]);
     }
@@ -260,7 +221,7 @@ mod tests {
         });
         // Filter selecting the book with title == 'Sword' and returning its category
         let path_no_root = "store.book[?(@.title == 'Sword')].category";
-        let m = jsonpath_lib::select(&obj, &super::normalize_jsonpath(path_no_root)).unwrap();
+        let m = jsonpath_lib::select(&obj, &normalize_jsonpath(path_no_root)).unwrap();
         let got: Vec<String> = m.iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert_eq!(got, vec!["fiction".to_string()]);
 
@@ -318,28 +279,35 @@ mod tests {
         assert_eq!(out, expected);
     }
 
+    // Restored (adapted) tests replacing the removed fast-path tests
     #[test]
-    fn test_is_simple_dot_path_accepts_and_rejects() {
-        assert!(is_simple_dot_path("a.b.c").is_some());
-        assert!(is_simple_dot_path("$.a.b").is_some());
-        assert!(is_simple_dot_path("a b.c-d_e").is_some());
-        // reject operators and arrays
-        assert!(is_simple_dot_path("a.b[0]").is_none());
-        assert!(is_simple_dot_path("store.book[*].title").is_none());
-        assert!(is_simple_dot_path("").is_none());
-        assert!(is_simple_dot_path("a..b").is_none());
+    fn test_jsonpath_simple_dot_traversal() {
+        let obj = json!({"a": {"b": {"c": 1}, "x": 2}});
+        let matches = jsonpath_lib::select(&obj, &normalize_jsonpath("a.b.c")).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], &json!(1));
+
+        // missing path should yield no matches
+        let missing = jsonpath_lib::select(&obj, &normalize_jsonpath("a.b.missing")).unwrap();
+        assert!(missing.is_empty());
+
+        // traversal stops when encountering non-object (a.x is scalar)
+        let stop = jsonpath_lib::select(&obj, &normalize_jsonpath("a.x.y")).unwrap();
+        assert!(stop.is_empty());
     }
 
     #[test]
-    fn test_get_by_dot_path_traversal() {
-        let obj = json!({"a": {"b": {"c": 1}, "x": 2}});
-        let v = get_by_dot_path(&obj, "a.b.c");
-        assert_eq!(v, Some(&json!(1)));
-        let missing = get_by_dot_path(&obj, "a.b.missing");
-        assert!(missing.is_none());
-        // stops when encountering non-object
-        let stop = get_by_dot_path(&obj, "a.x.y");
-        assert!(stop.is_none());
+    fn test_jsonpath_quoted_key_segments() {
+        // Properly quoted segment with a space: a['some key'].next
+        let obj = json!({"a": {"some key": {"next": 42}}});
+        let m = jsonpath_lib::select(&obj, &normalize_jsonpath("a['some key'].next")).unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0], &json!(42));
+
+        // Mixed characters requiring quotes
+        let obj2 = json!({"a b": {"c-d_e": {"k": "v"}}});
+        let m2 = jsonpath_lib::select(&obj2, &normalize_jsonpath("['a b']['c-d_e'].k")).unwrap();
+        assert_eq!(m2.len(), 1);
+        assert_eq!(m2[0], &json!("v"));
     }
 }
-
