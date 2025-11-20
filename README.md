@@ -109,6 +109,9 @@ print(extract_jsonpaths_and_values(obj))
 
 ## Notes
 - JSONPath is powered by `jsonpath_lib` crate.
+- JSONPath keys with spaces or special characters must be quoted using bracket notation.
+  - Example: use `a['some key'].next` instead of `a.some key.next`.
+  - You may omit the leading `$`; the resolver adds it automatically.
 - Paths produced by value search:
   - Use `.` between object keys and `[idx]` for arrays.
   - If the entire input equals the target, no paths are returned (empty list).
