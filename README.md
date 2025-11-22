@@ -20,7 +20,7 @@ Requires Python 3.8+.
 ## Run Tests
 
 - Rust unit tests (no Python needed)
-  - `cargo test`
+  - `cargo test --no-default-features`
   - Also compile PyO3 bindings: `PYO3_PYTHON=$(which python3) cargo test --features python`
 
 - Python tests (pytest)
