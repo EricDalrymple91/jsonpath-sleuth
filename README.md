@@ -106,12 +106,65 @@ print(extract_jsonpaths_and_values(obj))
 # ]
 ```
 
+### Advanced: Nested Wildcard Filters
+
+JSONPath Sleuth supports **nested wildcard filters** - a powerful feature that most JSONPath libraries don't handle well:
+
+```python
+from jsonpath_sleuth import resolve_jsonpath
+
+data = {
+    "parties": [
+        {
+            "name": "Alice",
+            "results": [
+                {"item": "A"},
+                {"item": "B"}
+            ]
+        },
+        {
+            "name": "Bob",
+            "results": []
+        },
+        {
+            "name": "Charlie",
+            "results": [
+                {"item": "A"},
+                {"item": "C"}
+            ]
+        }
+    ]
+}
+
+# Find all parties that have ANY result with item='A'
+print(resolve_jsonpath(data, "parties[?(@.results[*].item=='A')].name"))
+# -> ["Alice", "Charlie"]
+
+# This pattern works: <base>[?(@.<nested_array>[*].<field>=='<value>')].<result_field>
+```
+
+**How it works:**
+- Checks if ANY item in the nested array matches the condition
+- Returns the specified field from matching parent objects
+- Custom implementation handles what standard JSONPath libraries can't
+
 
 ## Notes
-- JSONPath is powered by `jsonpath_lib` crate.
-- JSONPath keys with spaces or special characters must be quoted using bracket notation.
-  - Example: use `a['some key'].next` instead of `a.some key.next`.
-  - You may omit the leading `$`; the resolver adds it automatically.
-- Paths produced by value search:
-  - Use `.` between object keys and `[idx]` for arrays.
-  - If the entire input equals the target, no paths are returned (empty list).
+
+### JSONPath Support
+- Standard JSONPath is powered by `jsonpath-rust` crate
+- Nested wildcard filters use custom implementation for enhanced functionality
+- JSONPath keys with spaces or special characters must be quoted using bracket notation
+  - Example: use `a['some key'].next` instead of `a.some key.next`
+  - You may omit the leading `$`; the resolver adds it automatically
+
+### Path Format
+- Paths produced by value search use `.` between object keys and `[idx]` for arrays
+- If the entire input equals the target, no paths are returned (empty list)
+
+### Supported Patterns
+- ✅ Standard wildcards: `store.book[*].title`
+- ✅ Filters: `store.book[?(@.price < 10)].title`
+- ✅ **Nested wildcard filters**: `parties[?(@.results[*].item=='A')].name`
+- ✅ Recursive descent: `$..price`
+- ✅ Array slices: `store.book[0:2].title`

@@ -18,6 +18,39 @@ fn normalize_jsonpath(path: &str) -> String {
     }
 }
 
+/// Custom evaluation of filters with nested wildcards like: parties[?(@.results[*].item=='A')].name
+fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value>, String> {
+    use jsonpath_rust::JsonPath;
+    
+    // Parse: <base>[?(@.<nested_array>[*].<field>=='<value>')].<result>
+    let re = regex::Regex::new(r"^(.*?)\[\?\(@\.(.*?)\[\*\]\.(.*?)\s*==\s*'([^']*)'\)\]\.?(.*)$")
+        .map_err(|e| format!("Regex error: {e}"))?;
+    
+    let caps = re.captures(path).ok_or("Not a nested wildcard filter")?;
+    let (base, nested_arr, nested_field, expected, result_field) = (
+        caps.get(1).map_or("$", |m| m.as_str()),
+        caps.get(2).map_or("", |m| m.as_str()),
+        caps.get(3).map_or("", |m| m.as_str()),
+        caps.get(4).map_or("", |m| m.as_str()),
+        caps.get(5).map_or("", |m| m.as_str()),
+    );
+    
+    // Get all items at base path
+    let base_norm = if base.is_empty() || base == "$" { "$" } else if base.starts_with('$') { base } else { &format!("$.{}", base) };
+    let jp = JsonPath::try_from(format!("{}[*]", base_norm).as_str()).map_err(|e| format!("{e}"))?;
+    let Value::Array(items) = jp.find(data) else { return Ok(vec![]) };
+    
+    // Filter items where nested array contains matching value
+    let expected_val = Value::String(expected.to_string());
+    Ok(items.iter().filter_map(|item| {
+        let obj = item.as_object()?;
+        let arr = obj.get(nested_arr)?.as_array()?;
+        
+        arr.iter().any(|nested| nested.get(nested_field) == Some(&expected_val))
+            .then(|| if result_field.is_empty() { Some(item.clone()) } else { obj.get(result_field).cloned() })?
+    }).collect())
+}
+
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -83,20 +116,27 @@ fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, V
 #[cfg(feature = "python")]
 #[pyfunction]
 fn resolve_jsonpath(py: Python<'_>, data: &Bound<'_, PyAny>, path: &str) -> PyResult<Vec<Py<PyAny>>> {
+    use jsonpath_rust::JsonPath;
+    
     let v: Value = depythonize(data)
-        .map_err(|e: pythonize::PythonizeError| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
+        .map_err(|e| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
 
-    let path = normalize_jsonpath(path);
-    let matches = jsonpath_lib::select(&v, &path)
-        .map_err(|e| PyValueError::new_err(format!("JSONPath error: {e}")))?;
+    let norm_path = normalize_jsonpath(path);
+    
+    // Try custom nested wildcard filter first, fallback to standard JSONPath
+    let matches = evaluate_nested_wildcard_filter(&v, &norm_path).or_else(|_| {
+        let jp = JsonPath::try_from(norm_path.as_str())
+            .map_err(|e| format!("JSONPath parse error: {e}"))?;
+        Ok(match jp.find(&v) {
+            Value::Array(arr) => arr,
+            Value::Null => vec![],
+            other => vec![other],
+        })
+    }).map_err(|e: String| PyValueError::new_err(e))?;
 
-    let mut out: Vec<Py<PyAny>> = Vec::with_capacity(matches.len());
-    for m in matches {
-        let py_obj = pythonize(py, m)
-            .map_err(|e| PyValueError::new_err(format!("Convert error: {e}")))?;
-        out.push(py_obj.into());
-    }
-    Ok(out)
+    matches.iter()
+        .map(|m| pythonize(py, m).map(|obj| obj.into()).map_err(|e| PyValueError::new_err(format!("Convert error: {e}"))))
+        .collect()
 }
 
 #[cfg(feature = "python")]
@@ -187,6 +227,8 @@ mod tests {
 
     #[test]
     fn test_resolve_jsonpath_titles() {
+        use jsonpath_rust::JsonPath;
+        
         let obj = json!({
             "store": {
                 "book": [
@@ -195,22 +237,29 @@ mod tests {
                 ]
             }
         });
-        // direct jsonpath_lib (with leading $)
-        let matches = jsonpath_lib::select(&obj, "$.store.book[*].title").unwrap();
-        let got: Vec<String> = matches
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
+        // direct jsonpath-rust (with leading $)
+        let path = JsonPath::try_from("$.store.book[*].title").unwrap();
+        let result = path.find(&obj);
+        let got: Vec<String> = match result {
+            Value::Array(arr) => arr.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
+            _ => vec![],
+        };
         assert_eq!(got, vec!["Sword".to_string(), "Shield".to_string()]);
 
         // our normalizer should accept paths without the leading $
-        let m2 = jsonpath_lib::select(&obj, &normalize_jsonpath("store.book[*].title")).unwrap();
-        let got2: Vec<String> = m2.iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        let path2 = JsonPath::try_from(normalize_jsonpath("store.book[*].title").as_str()).unwrap();
+        let result2 = path2.find(&obj);
+        let got2: Vec<String> = match result2 {
+            Value::Array(arr) => arr.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
+            _ => vec![],
+        };
         assert_eq!(got2, vec!["Sword".to_string(), "Shield".to_string()]);
     }
 
     #[test]
     fn test_resolve_jsonpath_filter_by_title() {
+        use jsonpath_rust::JsonPath;
+        
         let obj = json!({
             "store": {
                 "book": [
@@ -221,13 +270,21 @@ mod tests {
         });
         // Filter selecting the book with title == 'Sword' and returning its category
         let path_no_root = "store.book[?(@.title == 'Sword')].category";
-        let m = jsonpath_lib::select(&obj, &normalize_jsonpath(path_no_root)).unwrap();
-        let got: Vec<String> = m.iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        let path = JsonPath::try_from(normalize_jsonpath(path_no_root).as_str()).unwrap();
+        let result = path.find(&obj);
+        let got: Vec<String> = match result {
+            Value::Array(arr) => arr.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
+            _ => vec![],
+        };
         assert_eq!(got, vec!["fiction".to_string()]);
 
         // Explicit root should behave the same
-        let m2 = jsonpath_lib::select(&obj, "$.store.book[?(@.title == 'Sword')].category").unwrap();
-        let got2: Vec<String> = m2.iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        let path2 = JsonPath::try_from("$.store.book[?(@.title == 'Sword')].category").unwrap();
+        let result2 = path2.find(&obj);
+        let got2: Vec<String> = match result2 {
+            Value::Array(arr) => arr.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
+            _ => vec![],
+        };
         assert_eq!(got2, vec!["fiction".to_string()]);
     }
 
@@ -282,32 +339,53 @@ mod tests {
     // Restored (adapted) tests replacing the removed fast-path tests
     #[test]
     fn test_jsonpath_simple_dot_traversal() {
+        use jsonpath_rust::JsonPath;
+        
         let obj = json!({"a": {"b": {"c": 1}, "x": 2}});
-        let matches = jsonpath_lib::select(&obj, &normalize_jsonpath("a.b.c")).unwrap();
+        let path = JsonPath::try_from(normalize_jsonpath("a.b.c").as_str()).unwrap();
+        let result = path.find(&obj);
+        let matches = match &result {
+            Value::Array(arr) => arr,
+            _ => panic!("Expected array result"),
+        };
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0], &json!(1));
+        assert_eq!(matches[0], json!(1));
 
         // missing path should yield no matches
-        let missing = jsonpath_lib::select(&obj, &normalize_jsonpath("a.b.missing")).unwrap();
-        assert!(missing.is_empty());
+        let path_missing = JsonPath::try_from(normalize_jsonpath("a.b.missing").as_str()).unwrap();
+        let result_missing = path_missing.find(&obj);
+        assert!(matches!(result_missing, Value::Array(ref arr) if arr.is_empty()) || result_missing == Value::Null);
 
         // traversal stops when encountering non-object (a.x is scalar)
-        let stop = jsonpath_lib::select(&obj, &normalize_jsonpath("a.x.y")).unwrap();
-        assert!(stop.is_empty());
+        let path_stop = JsonPath::try_from(normalize_jsonpath("a.x.y").as_str()).unwrap();
+        let result_stop = path_stop.find(&obj);
+        assert!(matches!(result_stop, Value::Array(ref arr) if arr.is_empty()) || result_stop == Value::Null);
     }
 
     #[test]
     fn test_jsonpath_quoted_key_segments() {
+        use jsonpath_rust::JsonPath;
+        
         // Properly quoted segment with a space: a['some key'].next
         let obj = json!({"a": {"some key": {"next": 42}}});
-        let m = jsonpath_lib::select(&obj, &normalize_jsonpath("a['some key'].next")).unwrap();
+        let path = JsonPath::try_from(normalize_jsonpath("a['some key'].next").as_str()).unwrap();
+        let result = path.find(&obj);
+        let m = match &result {
+            Value::Array(arr) => arr,
+            _ => panic!("Expected array result"),
+        };
         assert_eq!(m.len(), 1);
-        assert_eq!(m[0], &json!(42));
+        assert_eq!(m[0], json!(42));
 
         // Mixed characters requiring quotes
         let obj2 = json!({"a b": {"c-d_e": {"k": "v"}}});
-        let m2 = jsonpath_lib::select(&obj2, &normalize_jsonpath("['a b']['c-d_e'].k")).unwrap();
+        let path2 = JsonPath::try_from(normalize_jsonpath("['a b']['c-d_e'].k").as_str()).unwrap();
+        let result2 = path2.find(&obj2);
+        let m2 = match &result2 {
+            Value::Array(arr) => arr,
+            _ => panic!("Expected array result"),
+        };
         assert_eq!(m2.len(), 1);
-        assert_eq!(m2[0], &json!("v"));
+        assert_eq!(m2[0], json!("v"));
     }
 }

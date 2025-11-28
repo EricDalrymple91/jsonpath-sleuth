@@ -54,6 +54,33 @@ class TestResolveJSONPath:
         obj = {"a": {"b": {"c": 1}}}
         assert resolve_jsonpath(obj, "a.b.x") == []
 
+    def test_nested_wildcard_in_filter(self) -> None:
+        """
+        Test nested wildcards in filter expressions.
+
+        This package now supports nested wildcards in filter predicates
+        like [?(@.results[*].item=='A')] through custom implementation.
+        """
+        obj = {
+            "parties": [
+                {"name": "V1", "results": [{"item": "A"}, {"item": "B"}]},
+                {"name": "V2", "results": []},
+                {"name": "V3", "results": [{"item": "A"}]},
+            ]
+        }
+
+        # Nested wildcard in filter - now supported!
+        result_wildcard = resolve_jsonpath(
+            obj, "parties[?(@.results[*].item=='A')].name"
+        )
+        assert result_wildcard == ["V1", "V3"]
+
+        # Specific index also works
+        result_indexed = resolve_jsonpath(
+            obj, "parties[?(@.results[0].item=='A')].name"
+        )
+        assert result_indexed == ["V1", "V3"]
+
 
 class TestFindJSONPathsByValue:
     def test_multiple_hits(self) -> None:
