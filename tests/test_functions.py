@@ -220,119 +220,95 @@ class TestExtractJSONPathsAndValues:
             ]
         )
 
-
-class TestRegressionScenarios:
-    """
-    Test the 4 critical regression scenarios from v0.1.9.
-    These cover chained filters, logical operators, and wildcards after filters.
-    """
-
-    @pytest.fixture
-    def insurance_data(self):
-        """Sample insurance data used in regression tests."""
-        return {
-            "parties": [
+    def test_chained_filters(self) -> None:
+        """Test chained filter expressions (was broken in v0.1.9)."""
+        obj = {
+            "items": [
                 {
-                    "first_name": "John",
-                    "last_name": "Doe",
-                    "insured_type": "primary_named_insured",
-                    "credit_score": 750,
-                    "length_of_residence": "1.5",
-                    "credit_hit_status": "success",
-                    "credit_reasons": [
-                        {"code": "REASON_001"},
-                        {"code": "REASON_002"},
-                    ],
-                    "communications": [
-                        {"type": "EMAIL", "value": "john@example.com"},
-                        {"type": "PHONE", "value": "555-0001"},
+                    "status": "published",
+                    "tags": [
+                        {"type": "category", "name": "fiction"},
+                        {"type": "genre", "name": "adventure"},
                     ],
                 },
+                {"status": "draft", "tags": []},
                 {
-                    "first_name": "Jane",
-                    "last_name": "Smith",
-                    "insured_type": "spouse",
-                    "credit_score": 720,
-                    "length_of_residence": "2.0",
-                    "credit_hit_status": "success",
-                    "credit_reasons": [
-                        {"code": "REASON_003"},
-                    ],
-                    "communications": [
-                        {"type": "EMAIL", "value": "jane@example.com"},
-                    ],
-                },
-                {
-                    "first_name": "Bob",
-                    "last_name": "Johnson",
-                    "insured_type": "dependent",
-                    "credit_score": 700,
-                    "length_of_residence": "1.5",
-                    "credit_hit_status": "failed",
-                    "credit_reasons": [],
-                    "communications": [],
-                },
-                {
-                    "first_name": "Spouse",
-                    "last_name": "extra",
-                    "insured_type": "extra",
-                    "credit_score": 680,
-                    "length_of_residence": "0.5",
-                    "credit_hit_status": "success",
-                    "credit_reasons": [{"code": "REASON_004"}],
-                    "communications": [
-                        {"type": "EMAIL", "value": "extra@example.com"},
+                    "status": "published",
+                    "tags": [
+                        {"type": "category", "name": "nonfiction"},
                     ],
                 },
             ]
         }
-
-    def test_regression_1_chained_filters(self, insurance_data):
-        """
-        Regression 1: Chained filters were broken.
-        Query: parties[?(@.insured_type == 'primary_named_insured')].communications[?(@.type == 'EMAIL')].value
-        Expected: ['john@example.com']
-        """
+        # Chain two filters: first by status, then by tag type
         result = resolve_jsonpath(
-            insurance_data,
-            r"parties[?(@.insured_type == 'primary_named_insured')].communications[?(@.type == 'EMAIL')].value",
+            obj,
+            r"items[?(@.status == 'published')].tags[?(@.type == 'category')].name",
         )
-        assert result == ["john@example.com"]
+        assert sorted(result) == sorted(["fiction", "nonfiction"])
 
-    def test_regression_2_logical_and(self, insurance_data):
-        """
-        Regression 2: Logical AND in filters was broken.
-        Query: parties[?(@.credit_score && @.length_of_residence == '1.5')].insured_type
-        Expected: ['primary_named_insured', 'dependent']
-        """
-        result = resolve_jsonpath(
-            insurance_data,
-            r"parties[?(@.credit_score && @.length_of_residence == '1.5')].insured_type",
-        )
-        assert sorted(result) == sorted(["primary_named_insured", "dependent"])
+    def test_logical_and_in_filter(self) -> None:
+        """Test logical AND operator in filters (was broken in v0.1.9)."""
+        obj = {
+            "books": [
+                {"title": "Book A", "pages": 300, "rating": "5"},
+                {"title": "Book B", "pages": 250, "rating": "4"},
+                {"title": "Book C", "pages": 300, "rating": "3"},
+                {"title": "Book D", "pages": 400, "rating": "5"},
+            ]
+        }
+        # Filter by pages AND rating
+        result = resolve_jsonpath(obj, r"books[?(@.pages && @.rating == '5')].title")
+        assert sorted(result) == sorted(["Book A", "Book D"])
 
-    def test_regression_3_logical_or(self, insurance_data):
-        """
-        Regression 3: Logical OR in filters was broken.
-        Query: parties[?(@.first_name == 'Spouse' || @.last_name == 'extra')].first_name
-        Expected: ['Spouse']
-        """
+    def test_logical_or_in_filter(self) -> None:
+        """Test logical OR operator in filters (was broken in v0.1.9)."""
+        obj = {
+            "items": [
+                {"id": 1, "status": "active"},
+                {"id": 2, "status": "inactive"},
+                {"id": 3, "status": "featured"},
+                {"id": 4, "status": "archived"},
+            ]
+        }
+        # Filter by status OR id
         result = resolve_jsonpath(
-            insurance_data,
-            r"parties[?(@.first_name == 'Spouse' || @.last_name == 'extra')].first_name",
+            obj,
+            r"items[?(@.status == 'active' || @.status == 'featured')].id",
         )
-        assert result == ["Spouse"]
+        assert sorted(result) == sorted([1, 3])
 
-    def test_regression_4_wildcard_after_filter(self, insurance_data):
-        """
-        Regression 4: Wildcards after filters were broken.
-        Query: parties[?(@.credit_hit_status == 'success')].credit_reasons[*].code
-        Expected: ['REASON_001', 'REASON_002', 'REASON_003', 'REASON_004']
-        """
+    def test_wildcard_after_filter(self) -> None:
+        """Test wildcard after filter expressions (was broken in v0.1.9)."""
+        obj = {
+            "collections": [
+                {
+                    "name": "Active",
+                    "status": "open",
+                    "items": [
+                        {"id": "a1"},
+                        {"id": "a2"},
+                    ],
+                },
+                {
+                    "name": "Archived",
+                    "status": "closed",
+                    "items": [{"id": "b1"}],
+                },
+                {
+                    "name": "Featured",
+                    "status": "open",
+                    "items": [
+                        {"id": "c1"},
+                        {"id": "c2"},
+                        {"id": "c3"},
+                    ],
+                },
+            ]
+        }
+        # Filter by status, then get all item ids
         result = resolve_jsonpath(
-            insurance_data,
-            r"parties[?(@.credit_hit_status == 'success')].credit_reasons[*].code",
+            obj,
+            r"collections[?(@.status == 'open')].items[*].id",
         )
-        assert sorted(result) == sorted(
-            ["REASON_001", "REASON_002", "REASON_003", "REASON_004"]
-        )
+        assert sorted(result) == sorted(["a1", "a2", "c1", "c2", "c3"])
