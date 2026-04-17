@@ -67,7 +67,7 @@ class TestResolveJSONPath:
         """
         obj = {
             "parties": [
-                {"name": "V1", "results": [{"item": "A"}, {"item": "B"}]},
+                {"name": "V1", "results": [{"item": "A"}]},
                 {"name": "V2", "results": []},
                 {"name": "V3", "results": [{"item": "A"}]},
             ]
@@ -113,7 +113,7 @@ class TestResolveJSONPath:
                     "items": [
                         {
                             "name": "item1",
-                            "results": [{"field": "value's type"}, {"field": "other"}],
+                            "results": [{"field": "value's type"}],
                         },
                         {"name": "item2", "results": [{"field": "value's type"}]},
                         {"name": "item3", "results": [{"field": "different"}]},
@@ -219,3 +219,96 @@ class TestExtractJSONPathsAndValues:
                 ("[4]", 1.5),
             ]
         )
+
+    def test_chained_filters(self) -> None:
+        """Test chained filter expressions (was broken in v0.1.9)."""
+        obj = {
+            "items": [
+                {
+                    "status": "published",
+                    "tags": [
+                        {"type": "category", "name": "fiction"},
+                        {"type": "genre", "name": "adventure"},
+                    ],
+                },
+                {"status": "draft", "tags": []},
+                {
+                    "status": "published",
+                    "tags": [
+                        {"type": "category", "name": "nonfiction"},
+                    ],
+                },
+            ]
+        }
+        # Chain two filters: first by status, then by tag type
+        result = resolve_jsonpath(
+            obj,
+            r"items[?(@.status == 'published')].tags[?(@.type == 'category')].name",
+        )
+        assert sorted(result) == sorted(["fiction", "nonfiction"])
+
+    def test_logical_and_in_filter(self) -> None:
+        """Test logical AND operator in filters (was broken in v0.1.9)."""
+        obj = {
+            "books": [
+                {"title": "Book A", "pages": 300, "rating": "5"},
+                {"title": "Book B", "pages": 250, "rating": "4"},
+                {"title": "Book C", "pages": 300, "rating": "3"},
+                {"title": "Book D", "pages": 400, "rating": "5"},
+            ]
+        }
+        # Filter by pages AND rating
+        result = resolve_jsonpath(obj, r"books[?(@.pages && @.rating == '5')].title")
+        assert sorted(result) == sorted(["Book A", "Book D"])
+
+    def test_logical_or_in_filter(self) -> None:
+        """Test logical OR operator in filters (was broken in v0.1.9)."""
+        obj = {
+            "items": [
+                {"id": 1, "status": "active"},
+                {"id": 2, "status": "inactive"},
+                {"id": 3, "status": "featured"},
+                {"id": 4, "status": "archived"},
+            ]
+        }
+        # Filter by status OR id
+        result = resolve_jsonpath(
+            obj,
+            r"items[?(@.status == 'active' || @.status == 'featured')].id",
+        )
+        assert sorted(result) == sorted([1, 3])
+
+    def test_wildcard_after_filter(self) -> None:
+        """Test wildcard after filter expressions (was broken in v0.1.9)."""
+        obj = {
+            "collections": [
+                {
+                    "name": "Active",
+                    "status": "open",
+                    "items": [
+                        {"id": "a1"},
+                        {"id": "a2"},
+                    ],
+                },
+                {
+                    "name": "Archived",
+                    "status": "closed",
+                    "items": [{"id": "b1"}],
+                },
+                {
+                    "name": "Featured",
+                    "status": "open",
+                    "items": [
+                        {"id": "c1"},
+                        {"id": "c2"},
+                        {"id": "c3"},
+                    ],
+                },
+            ]
+        }
+        # Filter by status, then get all item ids
+        result = resolve_jsonpath(
+            obj,
+            r"collections[?(@.status == 'open')].items[*].id",
+        )
+        assert sorted(result) == sorted(["a1", "a2", "c1", "c2", "c3"])

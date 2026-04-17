@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "jsonpath-sleuth"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "jsonpath-rust",
  "pyo3",
