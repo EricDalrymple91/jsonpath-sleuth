@@ -148,6 +148,51 @@ print(resolve_jsonpath(data, "parties[?(@.results[*].item=='A')].name"))
 - Returns the specified field from matching parent objects
 - Custom implementation handles what standard JSONPath libraries can't
 
+### Apostrophes in Filter Values
+
+Filter expressions support apostrophes in comparison strings by escaping them with backslashes:
+
+```python
+from jsonpath_sleuth import resolve_jsonpath
+
+# Simple filter with apostrophe
+data = [
+    {"name": "item with's", "amount": 100},
+    {"name": "plain item", "amount": 200},
+    {"name": "item with's", "amount": 300},
+]
+
+result = resolve_jsonpath(data, r"[?(@.name == 'item with\'s')].amount")
+# -> [100, 300]
+
+# Nested wildcard with apostrophe
+nested_data = {
+    "items": [
+        {"name": "item1", "results": [{"type": "value's type"}, {"type": "other"}]},
+        {"name": "item2", "results": [{"type": "value's type"}]},
+    ]
+}
+
+result = resolve_jsonpath(
+    nested_data, 
+    r"items[?(@.results[*].type=='value\'s type')].name"
+)
+# -> ["item1", "item2"]
+
+# Multiple apostrophes in a single filter
+multi_data = [
+    {"desc": "Mary's and John's", "id": "a"},
+    {"desc": "other", "id": "b"},
+]
+
+result = resolve_jsonpath(multi_data, r"[?(@.desc == 'Mary\'s and John\'s')].id")
+# -> ["a"]
+```
+
+When writing JSONPath queries in Python:
+- Use raw strings (`r"..."`) to avoid double-escaping: `r"[?(@.name == 'user\'s name')]"`
+- Escape apostrophes with backslash: `\'`
+- Works with both simple and nested wildcard filters
 
 ## Notes
 
@@ -157,6 +202,7 @@ print(resolve_jsonpath(data, "parties[?(@.results[*].item=='A')].name"))
 - JSONPath keys with spaces or special characters must be quoted using bracket notation
   - Example: use `a['some key'].next` instead of `a.some key.next`
   - You may omit the leading `$`; the resolver adds it automatically
+- Filter values with apostrophes must escape them: `'user\'s name'`
 
 ### Path Format
 - Paths produced by value search use `.` between object keys and `[idx]` for arrays
