@@ -24,6 +24,7 @@ fn normalize_jsonpath(path: &str) -> String {
 
 /// Extract filter values from query that contain apostrophes and create placeholders
 /// Returns (modified_query, map of placeholder -> original (unescaped) value)
+#[allow(dead_code)]
 fn preprocess_query_apostrophes(path: &str) -> (String, HashMap<String, String>) {
     let mut result = String::new();
     let mut map = HashMap::new();
@@ -115,6 +116,7 @@ fn preprocess_query_apostrophes(path: &str) -> (String, HashMap<String, String>)
 }
 
 /// Replace values in data that match apostrophe strings from the query with placeholders
+#[allow(dead_code)]
 fn replace_apostrophes_in_data_with_placeholders(
     value: &mut Value,
     replacements: &HashMap<String, String>,
@@ -144,6 +146,7 @@ fn replace_apostrophes_in_data_with_placeholders(
 }
 
 /// Restore original apostrophe-containing values in results
+#[allow(dead_code)]
 fn restore_apostrophes_in_results(value: &mut Value, replacements: &HashMap<String, String>) {
     match value {
         Value::Object(map) => {
@@ -821,7 +824,7 @@ mod tests {
 
     #[test]
     fn test_replace_and_restore_apostrophes() {
-        let (path, map) =
+        let (_path, map) =
             preprocess_query_apostrophes("[?(@.name == 'it\\'s Bob\\'s item')].value");
 
         let mut data = json!([
