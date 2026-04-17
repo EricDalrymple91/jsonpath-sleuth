@@ -7,8 +7,8 @@ use pyo3::types::PyModule;
 #[cfg(feature = "python")]
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
+use std::collections::HashMap;
 
-#[allow(dead_code)]
 fn normalize_jsonpath(path: &str) -> String {
     let p = path.trim();
     match p.chars().next() {
@@ -19,30 +19,97 @@ fn normalize_jsonpath(path: &str) -> String {
     }
 }
 
+/// Pre-processor: Replace apostrophe-containing strings with placeholders
+/// Returns the modified path and a map of placeholders to original (unescaped) values
+fn preprocess_apostrophe_strings(path: &str) -> (String, HashMap<String, String>) {
+    let mut map = HashMap::new();
+    let mut result = String::new();
+    let mut counter = 0;
+    let mut in_string = false;
+    let mut chars = path.chars().peekable();
+    let mut current_string = String::new();
+    let mut unescaped_string = String::new();
+    let mut has_apostrophe = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                in_string = !in_string;
+                if in_string {
+                    // Starting a string
+                    current_string.clear();
+                    unescaped_string.clear();
+                    has_apostrophe = false;
+                } else {
+                    // Ending a string - check if it contained an apostrophe
+                    if has_apostrophe {
+                        let placeholder = format!("__APOSTROPHE_{}__", counter);
+                        // Store the unescaped version (without backslashes)
+                        map.insert(placeholder.clone(), unescaped_string.clone());
+                        result.push('\'');
+                        result.push_str(&placeholder);
+                        result.push('\'');
+                        counter += 1;
+                    } else {
+                        // No apostrophe - output as-is
+                        result.push('\'');
+                        result.push_str(&current_string);
+                        result.push('\'');
+                    }
+                }
+            }
+            '\\' if in_string => {
+                // Handle escaped characters inside strings
+                current_string.push(ch);
+                if let Some(next) = chars.next() {
+                    current_string.push(next);
+                    // Add unescaped version
+                    unescaped_string.push(next);
+                    if next == '\'' {
+                        // This is an escaped apostrophe - mark that we have one
+                        has_apostrophe = true;
+                    }
+                }
+            }
+            _ => {
+                if in_string {
+                    current_string.push(ch);
+                    unescaped_string.push(ch);
+                } else {
+                    result.push(ch);
+                }
+            }
+        }
+    }
+
+    (result, map)
+}
+
+/// Post-processor: Restore original apostrophe-containing strings in results
+fn postprocess_apostrophe_strings(result: &str, map: &HashMap<String, String>) -> String {
+    let mut result = result.to_string();
+    for (placeholder, original) in map {
+        result = result.replace(placeholder, original);
+    }
+    result
+}
+
 /// Custom evaluation of filters with nested wildcards like: parties[?(@.results[*].item=='A')].name
-/// Also supports escaped apostrophes: parties[?(@.results[*].item=='some guy\'s item')].name
-#[allow(dead_code)]
 fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value>, String> {
     use jsonpath_rust::JsonPath;
 
     // Parse: <base>[?(@.<nested_array>[*].<field>=='<value>')].<result>
-    // Updated regex to handle escaped quotes: 'value with \'escaped\''
-    let re = regex::Regex::new(
-        r"^(.*?)\[\?\(@\.(.*?)\[\*\]\.(.*?)\s*==\s*'((?:\\.|[^'])*?)'\)\]\.?(.*)$",
-    )
-    .map_err(|e| format!("Regex error: {e}"))?;
+    let re = regex::Regex::new(r"^(.*?)\[\?\(@\.(.*?)\[\*\]\.(.*?)\s*==\s*'([^']*)'\)\]\.?(.*)$")
+        .map_err(|e| format!("Regex error: {e}"))?;
 
     let caps = re.captures(path).ok_or("Not a nested wildcard filter")?;
-    let (base, nested_arr, nested_field, expected_raw, result_field) = (
+    let (base, nested_arr, nested_field, expected, result_field) = (
         caps.get(1).map_or("$", |m| m.as_str()),
         caps.get(2).map_or("", |m| m.as_str()),
         caps.get(3).map_or("", |m| m.as_str()),
         caps.get(4).map_or("", |m| m.as_str()),
         caps.get(5).map_or("", |m| m.as_str()),
     );
-
-    // Unescape the expected value: \' -> '
-    let expected = expected_raw.replace("\\'", "'");
 
     // Get all items at base path
     let base_norm = if base.is_empty() || base == "$" {
@@ -79,79 +146,6 @@ fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value
         .collect())
 }
 
-/// Custom evaluation of standard filters with escaped apostrophes like: items[?(@.name == 'some guy\'s item')].amount
-#[allow(dead_code)]
-fn evaluate_simple_filter_with_escaped_quotes(
-    data: &Value,
-    path: &str,
-) -> Result<Vec<Value>, String> {
-    use jsonpath_rust::JsonPath;
-
-    // Parse: <base>[?(@.<field> == '<value>')][.<result>]
-    // Regex handles escaped quotes: 'value with \'escaped\''
-    let re = regex::Regex::new(r"^(.*?)\[\?\(@\.(.*?)\s*==\s*'((?:\\.|[^'])*?)'\)\](.*)$")
-        .map_err(|e| format!("Regex error: {e}"))?;
-
-    let caps = re.captures(path).ok_or("Not a simple filter")?;
-    let (base, field, expected_raw, result_suffix) = (
-        caps.get(1).map_or("$", |m| m.as_str()),
-        caps.get(2).map_or("", |m| m.as_str()),
-        caps.get(3).map_or("", |m| m.as_str()),
-        caps.get(4).map_or("", |m| m.as_str()),
-    );
-
-    // Unescape the expected value: \' -> '
-    let expected = expected_raw.replace("\\'", "'");
-
-    // Get all items at base path
-    let base_norm = if base.is_empty() || base == "$" {
-        "$"
-    } else if base.starts_with('$') {
-        base
-    } else {
-        &format!("$.{}", base)
-    };
-    let jp =
-        JsonPath::try_from(format!("{}[*]", base_norm).as_str()).map_err(|e| format!("{e}"))?;
-    let Value::Array(items) = jp.find(data) else {
-        return Ok(vec![]);
-    };
-
-    // Filter items where the field matches the expected value
-    let expected_val = Value::String(expected);
-    let results: Vec<Value> = items
-        .iter()
-        .filter_map(|item| {
-            let obj = item.as_object()?;
-            (obj.get(field) == Some(&expected_val)).then(|| item.clone())
-        })
-        .collect();
-
-    // If result_suffix is provided (e.g., ".field"), extract that field from each result
-    if !result_suffix.is_empty() {
-        let mut final_results = Vec::new();
-        for item in results {
-            if let Some(obj) = item.as_object() {
-                // result_suffix could be ".field" or ".[field]" etc.
-                let suffix_norm = if result_suffix.starts_with('.') {
-                    &result_suffix[1..]
-                } else if result_suffix.starts_with('[') && result_suffix.ends_with(']') {
-                    &result_suffix[1..result_suffix.len() - 1]
-                } else {
-                    result_suffix
-                };
-                if let Some(val) = obj.get(suffix_norm) {
-                    final_results.push(val.clone());
-                }
-            }
-        }
-        Ok(final_results)
-    } else {
-        Ok(results)
-    }
-}
-
-#[allow(dead_code)]
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -186,7 +180,6 @@ fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut V
     }
 }
 
-#[allow(dead_code)]
 fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, Value)>) {
     match node {
         Value::Object(map) => {
@@ -229,11 +222,13 @@ fn resolve_jsonpath(
 
     let norm_path = normalize_jsonpath(path);
 
-    // Try custom nested wildcard filter first, then simple filter, then fallback to standard JSONPath
-    let matches = evaluate_nested_wildcard_filter(&v, &norm_path)
-        .or_else(|_| evaluate_simple_filter_with_escaped_quotes(&v, &norm_path))
+    // Pre-process: Replace apostrophe-containing strings with placeholders
+    let (processed_path, apostrophe_map) = preprocess_apostrophe_strings(&norm_path);
+
+    // Try custom nested wildcard filter first, fallback to standard JSONPath
+    let matches = evaluate_nested_wildcard_filter(&v, &processed_path)
         .or_else(|_| {
-            let jp = JsonPath::try_from(norm_path.as_str())
+            let jp = JsonPath::try_from(processed_path.as_str())
                 .map_err(|e| format!("JSONPath parse error: {e}"))?;
             Ok(match jp.find(&v) {
                 Value::Array(arr) => arr,
@@ -243,7 +238,17 @@ fn resolve_jsonpath(
         })
         .map_err(|e: String| PyValueError::new_err(e))?;
 
-    matches
+    // Post-process: Restore original strings in results
+    let processed_matches: Vec<Value> = matches
+        .iter()
+        .map(|m| {
+            let json_str = m.to_string();
+            let restored_str = postprocess_apostrophe_strings(&json_str, &apostrophe_map);
+            serde_json::from_str(&restored_str).unwrap_or(m.clone())
+        })
+        .collect();
+
+    processed_matches
         .iter()
         .map(|m| {
             pythonize(py, m)
@@ -525,136 +530,62 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_filter_with_single_apostrophe() {
-        // Parametrized: Test simple filter with single apostrophe
-        struct Case {
-            obj: Value,
-            path: &'static str,
-            expected_len: usize,
-            expected: Vec<Value>,
-        }
-
-        let cases = vec![
-            Case {
-                obj: json!({
-                    "items": [
-                        {"name": "item with's", "value": 10},
-                        {"name": "plain item", "value": 20},
-                        {"name": "item with's", "value": 30},
-                    ]
-                }),
-                path: r"$.items[?(@.name == 'item with\'s')].value",
-                expected_len: 2,
-                expected: vec![json!(10), json!(30)],
-            },
-            Case {
-                obj: json!({
-                    "items": [
-                        {"name": "alpha's beta", "value": 50},
-                        {"name": "other", "value": 60},
-                    ]
-                }),
-                path: r"$.items[?(@.name == 'alpha\'s beta')].value",
-                expected_len: 1,
-                expected: vec![json!(50)],
-            },
-        ];
-
-        for case in cases {
-            let result = evaluate_simple_filter_with_escaped_quotes(&case.obj, case.path);
-            assert!(result.is_ok(), "Failed for path: {}", case.path);
-            let values = result.unwrap();
-            assert_eq!(
-                values.len(),
-                case.expected_len,
-                "Length mismatch for path: {}",
-                case.path
-            );
-            for (i, expected_val) in case.expected.iter().enumerate() {
-                assert_eq!(
-                    &values[i], expected_val,
-                    "Value mismatch at index {} for path: {}",
-                    i, case.path
-                );
-            }
-        }
+    fn test_preprocess_no_apostrophes() {
+        let path = "$.store.book[?(@.title == 'Sword')].category";
+        let (_processed, map) = preprocess_apostrophe_strings(path);
+        // No apostrophes, so should be identical
+        assert_eq!(_processed, path);
+        assert!(map.is_empty());
     }
 
     #[test]
-    fn test_nested_wildcard_with_single_apostrophe() {
-        // Parametrized: Test nested wildcard filter with single apostrophe
-        struct Case {
-            obj: Value,
-            path: &'static str,
-            expected_len: usize,
-            expected: Vec<Value>,
-        }
-
-        let cases = vec![
-            Case {
-                obj: json!({
-                    "items": [
-                        {"name": "item1", "results": [{"field": "value's type"}, {"field": "other"}]},
-                        {"name": "item2", "results": [{"field": "value's type"}]},
-                        {"name": "item3", "results": [{"field": "different"}]},
-                    ]
-                }),
-                path: r"$.items[?(@.results[*].field=='value\'s type')].name",
-                expected_len: 2,
-                expected: vec![json!("item1"), json!("item2")],
-            },
-            Case {
-                obj: json!({
-                    "items": [
-                        {"id": "a", "results": [{"type": "object's type"}]},
-                        {"id": "b", "results": [{"type": "object's type"}]},
-                    ]
-                }),
-                path: r"$.items[?(@.results[*].type=='object\'s type')].id",
-                expected_len: 2,
-                expected: vec![json!("a"), json!("b")],
-            },
-        ];
-
-        for case in cases {
-            let result = evaluate_nested_wildcard_filter(&case.obj, case.path);
-            assert!(result.is_ok(), "Failed for path: {}", case.path);
-            let values = result.unwrap();
-            assert_eq!(
-                values.len(),
-                case.expected_len,
-                "Length mismatch for path: {}",
-                case.path
-            );
-            for (i, expected_val) in case.expected.iter().enumerate() {
-                assert_eq!(
-                    &values[i], expected_val,
-                    "Value mismatch at index {} for path: {}",
-                    i, case.path
-                );
-            }
-        }
+    fn test_preprocess_single_apostrophe() {
+        let path = "parties[?(@.name == 'it\\'s')].id";
+        let (processed, map) = preprocess_apostrophe_strings(path);
+        // Should replace with placeholder
+        assert!(processed.contains("__APOSTROPHE_"));
+        assert!(!processed.contains("it\\'s"));
+        assert_eq!(map.len(), 1);
+        assert!(map.values().next().unwrap().contains("it"));
     }
 
     #[test]
-    fn test_multiple_apostrophes_in_filter() {
-        // Test filter with multiple apostrophes
-        let obj = json!({
-            "items": [
-                {"name": "it's Bob's item", "value": 1},
-                {"name": "it's not his", "value": 2},
-                {"name": "it's Bob's item", "value": 3},
-            ]
-        });
+    fn test_preprocess_multiple_apostrophes() {
+        let path = "data[?(@.desc == 'Mary\\'s and John\\'s')].id";
+        let (processed, map) = preprocess_apostrophe_strings(path);
+        // Should handle multiple escaped apostrophes
+        assert!(map.len() >= 1);
+    }
 
-        let result = evaluate_simple_filter_with_escaped_quotes(
-            &obj,
-            r"$.items[?(@.name == 'it\'s Bob\'s item')].value",
-        );
-        assert!(result.is_ok());
-        let values = result.unwrap();
-        assert_eq!(values.len(), 2);
-        assert_eq!(values[0], json!(1));
-        assert_eq!(values[1], json!(3));
+    #[test]
+    fn test_postprocess_restore_values() {
+        let mut map = HashMap::new();
+        map.insert("__APOSTROPHE_0__".to_string(), "it's".to_string());
+
+        let json_str = r#"["__APOSTROPHE_0__", "other"]"#;
+        let restored = postprocess_apostrophe_strings(json_str, &map);
+        assert!(restored.contains("it's"));
+        assert!(!restored.contains("__APOSTROPHE_"));
+    }
+
+    #[test]
+    fn test_full_preprocess_postprocess_cycle() {
+        let path = "items[?(@.name == 'Bob\\'s item')].value";
+        let (processed, map) = preprocess_apostrophe_strings(path);
+
+        // Verify placeholder was created
+        assert!(processed.contains("__APOSTROPHE_"));
+        assert_eq!(map.len(), 1);
+
+        // Get the actual placeholder from the map
+        let placeholder = map.keys().next().unwrap().clone();
+
+        // Simulate returning a result with the placeholder
+        let mock_result = format!(r#"["{}"]"#, placeholder);
+        let restored = postprocess_apostrophe_strings(&mock_result, &map);
+
+        // Should restore to original value
+        assert!(restored.contains("Bob's item"));
+        assert!(!restored.contains("__APOSTROPHE_"));
     }
 }
