@@ -8,6 +8,7 @@ use pyo3::types::PyModule;
 use pythonize::{depythonize, pythonize};
 use serde_json::Value;
 
+#[allow(dead_code)]
 fn normalize_jsonpath(path: &str) -> String {
     let p = path.trim();
     match p.chars().next() {
@@ -20,6 +21,7 @@ fn normalize_jsonpath(path: &str) -> String {
 
 /// Custom evaluation of filters with nested wildcards like: parties[?(@.results[*].item=='A')].name
 /// Also supports escaped apostrophes: parties[?(@.results[*].item=='some guy\'s item')].name
+#[allow(dead_code)]
 fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value>, String> {
     use jsonpath_rust::JsonPath;
 
@@ -78,6 +80,7 @@ fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value
 }
 
 /// Custom evaluation of standard filters with escaped apostrophes like: items[?(@.name == 'some guy\'s item')].amount
+#[allow(dead_code)]
 fn evaluate_simple_filter_with_escaped_quotes(
     data: &Value,
     path: &str,
@@ -148,6 +151,7 @@ fn evaluate_simple_filter_with_escaped_quotes(
     }
 }
 
+#[allow(dead_code)]
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -182,6 +186,7 @@ fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut V
     }
 }
 
+#[allow(dead_code)]
 fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, Value)>) {
     match node {
         Value::Object(map) => {
