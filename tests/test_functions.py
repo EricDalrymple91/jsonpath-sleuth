@@ -1,3 +1,5 @@
+import pytest
+
 from jsonpath_sleuth import (
     resolve_jsonpath,
     find_jsonpaths_by_value,
@@ -80,6 +82,105 @@ class TestResolveJSONPath:
             obj, "parties[?(@.results[0].item=='A')].name"
         )
         assert result_indexed == ["V1", "V3"]
+
+    @pytest.mark.parametrize(
+        "data,path,expected",
+        [
+            # Single apostrophe in simple filter
+            (
+                [
+                    {"name": "item with's", "value": 10},
+                    {"name": "plain item", "value": 20},
+                    {"name": "item with's", "value": 30},
+                ],
+                r"[?(@.name == 'item with\'s')].value",
+                [10, 30],
+            ),
+            # Nested structure with apostrophe
+            (
+                {
+                    "records": [
+                        {"title": "alpha's beta", "amount": 50},
+                        {"title": "other", "amount": 60},
+                    ]
+                },
+                r"records[?(@.title == 'alpha\'s beta')].amount",
+                [50],
+            ),
+        ],
+    )
+    def test_simple_filter_with_apostrophe(self, data, path, expected) -> None:
+        """Test filter expressions with apostrophes in the string value."""
+        result = resolve_jsonpath(data, path)
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "data,path,expected",
+        [
+            # Nested wildcard with single apostrophe
+            (
+                {
+                    "items": [
+                        {
+                            "name": "item1",
+                            "results": [{"field": "value's type"}, {"field": "other"}],
+                        },
+                        {"name": "item2", "results": [{"field": "value's type"}]},
+                        {"name": "item3", "results": [{"field": "different"}]},
+                    ]
+                },
+                r"items[?(@.results[*].field=='value\'s type')].name",
+                ["item1", "item2"],
+            ),
+            # Another nested wildcard example
+            (
+                {
+                    "items": [
+                        {"id": "a", "results": [{"type": "object's type"}]},
+                        {"id": "b", "results": [{"type": "object's type"}]},
+                    ]
+                },
+                r"items[?(@.results[*].type=='object\'s type')].id",
+                ["a", "b"],
+            ),
+        ],
+    )
+    def test_nested_wildcard_with_apostrophe(self, data, path, expected) -> None:
+        """Test nested wildcard filters with apostrophes in the filter value."""
+        result = resolve_jsonpath(data, path)
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "data,path,expected",
+        [
+            # Multiple apostrophes
+            (
+                [
+                    {"name": "it's Bob's item", "value": 1},
+                    {"name": "it's not his", "value": 2},
+                    {"name": "it's Bob's item", "value": 3},
+                ],
+                r"[?(@.name == 'it\'s Bob\'s item')].value",
+                [1, 3],
+            ),
+            # Another multi-apostrophe case
+            (
+                {
+                    "data": [
+                        {"desc": "Mary's and John's", "id": "x"},
+                        {"desc": "Mary's only", "id": "y"},
+                        {"desc": "Mary's and John's", "id": "z"},
+                    ]
+                },
+                r"data[?(@.desc == 'Mary\'s and John\'s')].id",
+                ["x", "z"],
+            ),
+        ],
+    )
+    def test_multiple_apostrophes_in_filter(self, data, path, expected) -> None:
+        """Test filter expressions with multiple apostrophes in the value."""
+        result = resolve_jsonpath(data, path)
+        assert result == expected
 
 
 class TestFindJSONPathsByValue:
