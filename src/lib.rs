@@ -6,9 +6,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 #[cfg(feature = "python")]
 use pythonize::{depythonize, pythonize};
+#[allow(unused_imports)]
 use serde_json::Value;
+#[allow(unused_imports)]
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 fn normalize_jsonpath(path: &str) -> String {
     let p = path.trim();
     match p.chars().next() {
@@ -21,6 +24,7 @@ fn normalize_jsonpath(path: &str) -> String {
 
 /// Pre-processor: Replace apostrophe-containing strings with placeholders
 /// Returns the modified path and a map of placeholders to original (unescaped) values
+#[allow(dead_code)]
 fn preprocess_apostrophe_strings(path: &str) -> (String, HashMap<String, String>) {
     let mut map = HashMap::new();
     let mut result = String::new();
@@ -86,6 +90,7 @@ fn preprocess_apostrophe_strings(path: &str) -> (String, HashMap<String, String>
 }
 
 /// Post-processor: Restore original apostrophe-containing strings in results
+#[allow(dead_code)]
 fn postprocess_apostrophe_strings(result: &str, map: &HashMap<String, String>) -> String {
     let mut result = result.to_string();
     for (placeholder, original) in map {
@@ -95,6 +100,7 @@ fn postprocess_apostrophe_strings(result: &str, map: &HashMap<String, String>) -
 }
 
 /// Custom evaluation of filters with nested wildcards like: parties[?(@.results[*].item=='A')].name
+#[allow(dead_code)]
 fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value>, String> {
     use jsonpath_rust::JsonPath;
 
@@ -146,6 +152,7 @@ fn evaluate_nested_wildcard_filter(data: &Value, path: &str) -> Result<Vec<Value
         .collect())
 }
 
+#[allow(dead_code)]
 fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut Vec<String>) {
     match node {
         Value::Object(map) => {
@@ -180,6 +187,7 @@ fn visit_find_paths(node: &Value, target: &Value, path: &mut String, out: &mut V
     }
 }
 
+#[allow(dead_code)]
 fn visit_extract_pairs(node: &Value, path: &mut String, out: &mut Vec<(String, Value)>) {
     match node {
         Value::Object(map) => {
@@ -552,7 +560,7 @@ mod tests {
     #[test]
     fn test_preprocess_multiple_apostrophes() {
         let path = "data[?(@.desc == 'Mary\\'s and John\\'s')].id";
-        let (processed, map) = preprocess_apostrophe_strings(path);
+        let (_processed, map) = preprocess_apostrophe_strings(path);
         // Should handle multiple escaped apostrophes
         assert!(map.len() >= 1);
     }
