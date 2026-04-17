@@ -380,14 +380,6 @@ fn resolve_jsonpath(
     // Pre-process: Extract apostrophe-containing strings from query and create placeholders
     let (processed_path, apostrophe_map) = preprocess_query_apostrophes(&norm_path);
 
-    eprintln!("DEBUG resolve_jsonpath: input path: {}", path);
-    eprintln!("DEBUG resolve_jsonpath: normalized path: {}", norm_path);
-    eprintln!("DEBUG resolve_jsonpath: processed path: {}", processed_path);
-    eprintln!(
-        "DEBUG resolve_jsonpath: apostrophe_map: {:?}",
-        apostrophe_map
-    );
-
     // Replace corresponding values in data with placeholders
     replace_apostrophes_in_data_with_placeholders(&mut v, &apostrophe_map);
 
