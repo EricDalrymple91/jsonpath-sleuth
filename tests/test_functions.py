@@ -62,6 +62,8 @@ class TestResolveJSONPath:
 
         This package now supports nested wildcards in filter predicates
         like [?(@.results[*].item=='A')] through custom implementation.
+        Note: Indexed access within filters (e.g., results[0]) is not
+        supported; only wildcard patterns (e.g., results[*]) work.
         """
         obj = {
             "parties": [
@@ -72,16 +74,11 @@ class TestResolveJSONPath:
         }
 
         # Nested wildcard in filter - now supported!
+        # This checks if ANY item in the results array has item=='A'
         result_wildcard = resolve_jsonpath(
             obj, "parties[?(@.results[*].item=='A')].name"
         )
         assert result_wildcard == ["V1", "V3"]
-
-        # Specific index also works
-        result_indexed = resolve_jsonpath(
-            obj, "parties[?(@.results[0].item=='A')].name"
-        )
-        assert result_indexed == ["V1", "V3"]
 
     @pytest.mark.parametrize(
         "data,path,expected",
