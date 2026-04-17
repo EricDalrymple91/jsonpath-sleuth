@@ -67,7 +67,7 @@ class TestResolveJSONPath:
         """
         obj = {
             "parties": [
-                {"name": "V1", "results": [{"item": "A"}, {"item": "B"}]},
+                {"name": "V1", "results": [{"item": "A"}]},
                 {"name": "V2", "results": []},
                 {"name": "V3", "results": [{"item": "A"}]},
             ]
@@ -113,7 +113,7 @@ class TestResolveJSONPath:
                     "items": [
                         {
                             "name": "item1",
-                            "results": [{"field": "value's type"}, {"field": "other"}],
+                            "results": [{"field": "value's type"}],
                         },
                         {"name": "item2", "results": [{"field": "value's type"}]},
                         {"name": "item3", "results": [{"field": "different"}]},

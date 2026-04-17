@@ -22,6 +22,150 @@ fn normalize_jsonpath(path: &str) -> String {
     }
 }
 
+/// Extract filter values from query that contain apostrophes and create placeholders
+/// Returns (modified_query, map of placeholder -> original (unescaped) value)
+fn preprocess_query_apostrophes(path: &str) -> (String, HashMap<String, String>) {
+    let mut result = String::new();
+    let mut map = HashMap::new();
+    let mut counter = 0;
+    let mut chars = path.chars().peekable();
+    let mut in_filter = false;
+    let mut in_string = false;
+    let mut string_quote = ' ';
+    let mut bracket_depth = 0;
+    let mut current_string = String::new();
+    let mut string_has_escaped_apos = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '[' if chars.peek() == Some(&'?') => {
+                in_filter = true;
+                bracket_depth = 1;
+                result.push(ch);
+                result.push(chars.next().unwrap()); // consume '?'
+            }
+            '[' if in_filter => {
+                bracket_depth += 1;
+                result.push(ch);
+            }
+            ']' if in_filter && !in_string => {
+                bracket_depth -= 1;
+                if bracket_depth == 0 {
+                    in_filter = false;
+                }
+                result.push(ch);
+            }
+            '\'' | '"' if in_filter && !in_string => {
+                in_string = true;
+                string_quote = ch;
+                current_string.clear();
+                string_has_escaped_apos = false;
+                result.push(ch);
+            }
+            '\'' | '"' if in_filter && in_string && ch == string_quote => {
+                // End of string - check if it had escaped apostrophes
+                in_string = false;
+                if string_has_escaped_apos {
+                    // Unescape the string value and create a placeholder
+                    let unescaped = current_string.replace("\\'", "'");
+                    let placeholder = format!("__APSTR_{}__", counter);
+                    map.insert(placeholder.clone(), unescaped.clone());
+                    // Replace the string content with just the placeholder (without quotes yet)
+                    // We already have the opening quote in result, so just add the placeholder
+                    result.pop(); // Remove the opening quote we added at string start
+                    result.push('\'');
+                    result.push_str(&placeholder);
+                    counter += 1;
+                } else {
+                    // No apostrophes, just remove the opening quote we added and re-add full content
+                    result.pop(); // Remove opening quote
+                    result.push('\'');
+                    result.push_str(&current_string);
+                }
+                result.push(ch); // Add closing quote
+            }
+            '\\' if in_filter && in_string => {
+                // Handle escaped characters
+                if let Some(&next_ch) = chars.peek() {
+                    chars.next(); // consume it
+                    if next_ch == '\'' {
+                        // This is an escaped apostrophe
+                        current_string.push('\\');
+                        current_string.push('\'');
+                        string_has_escaped_apos = true;
+                    } else {
+                        // Other escape sequence
+                        current_string.push(ch);
+                        current_string.push(next_ch);
+                    }
+                } else {
+                    current_string.push(ch);
+                }
+            }
+            _ if in_filter && in_string => {
+                current_string.push(ch);
+            }
+            _ => {
+                result.push(ch);
+            }
+        }
+    }
+
+    (result, map)
+}
+
+/// Replace values in data that match apostrophe strings from the query with placeholders
+fn replace_apostrophes_in_data_with_placeholders(
+    value: &mut Value,
+    replacements: &HashMap<String, String>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (_, v) in map.iter_mut() {
+                replace_apostrophes_in_data_with_placeholders(v, replacements);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                replace_apostrophes_in_data_with_placeholders(v, replacements);
+            }
+        }
+        Value::String(s) => {
+            // Check if this string matches any of our original values
+            for (placeholder, original) in replacements {
+                if s == original {
+                    *s = placeholder.clone();
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Restore original apostrophe-containing values in results
+fn restore_apostrophes_in_results(value: &mut Value, replacements: &HashMap<String, String>) {
+    match value {
+        Value::Object(map) => {
+            for (_, v) in map.iter_mut() {
+                restore_apostrophes_in_results(v, replacements);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                restore_apostrophes_in_results(v, replacements);
+            }
+        }
+        Value::String(s) => {
+            // Check if this is a placeholder
+            if let Some(original) = replacements.get(s) {
+                *s = original.clone();
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Pre-processor: Replace apostrophe-containing strings with placeholders
 /// Returns the modified path and a map of placeholders to original (unescaped) values
 #[allow(dead_code)]
@@ -225,38 +369,43 @@ fn resolve_jsonpath(
 ) -> PyResult<Vec<Py<PyAny>>> {
     use jsonpath_rust::JsonPath;
 
-    let v: Value =
+    let mut v: Value =
         depythonize(data).map_err(|e| PyValueError::new_err(format!("Invalid input JSON: {e}")))?;
 
     let norm_path = normalize_jsonpath(path);
 
-    // Pre-process: Replace apostrophe-containing strings with placeholders
-    let (processed_path, apostrophe_map) = preprocess_apostrophe_strings(&norm_path);
+    // Pre-process: Extract apostrophe-containing strings from query and create placeholders
+    let (processed_path, apostrophe_map) = preprocess_query_apostrophes(&norm_path);
+
+    eprintln!("DEBUG resolve_jsonpath: input path: {}", path);
+    eprintln!("DEBUG resolve_jsonpath: normalized path: {}", norm_path);
+    eprintln!("DEBUG resolve_jsonpath: processed path: {}", processed_path);
+    eprintln!(
+        "DEBUG resolve_jsonpath: apostrophe_map: {:?}",
+        apostrophe_map
+    );
+
+    // Replace corresponding values in data with placeholders
+    replace_apostrophes_in_data_with_placeholders(&mut v, &apostrophe_map);
 
     // Try custom nested wildcard filter first, fallback to standard JSONPath
-    let matches = evaluate_nested_wildcard_filter(&v, &processed_path)
-        .or_else(|_| {
-            let jp = JsonPath::try_from(processed_path.as_str())
-                .map_err(|e| format!("JSONPath parse error: {e}"))?;
-            Ok(match jp.find(&v) {
-                Value::Array(arr) => arr,
-                Value::Null => vec![],
-                other => vec![other],
-            })
-        })
-        .map_err(|e: String| PyValueError::new_err(e))?;
+    // TEMPORARY: Disable nested wildcard for debugging
+    let mut matches = {
+        let jp = JsonPath::try_from(processed_path.as_str())
+            .map_err(|e| PyValueError::new_err(format!("JSONPath parse error: {e}")))?;
+        match jp.find(&v) {
+            Value::Array(arr) => arr,
+            Value::Null => vec![],
+            other => vec![other],
+        }
+    };
 
-    // Post-process: Restore original strings in results
-    let processed_matches: Vec<Value> = matches
-        .iter()
-        .map(|m| {
-            let json_str = m.to_string();
-            let restored_str = postprocess_apostrophe_strings(&json_str, &apostrophe_map);
-            serde_json::from_str(&restored_str).unwrap_or(m.clone())
-        })
-        .collect();
+    // Post-process: Restore original apostrophe-containing values in results
+    for m in &mut matches {
+        restore_apostrophes_in_results(m, &apostrophe_map);
+    }
 
-    processed_matches
+    matches
         .iter()
         .map(|m| {
             pythonize(py, m)
@@ -480,6 +629,53 @@ mod tests {
 
     // Restored (adapted) tests replacing the removed fast-path tests
     #[test]
+    fn test_jsonpath_apostrophe_matching_variants() {
+        use jsonpath_rust::JsonPath;
+
+        let data = json!([
+            {"name": "item with's", "value": 10},
+            {"name": "plain item", "value": 20},
+            {"name": "item with's", "value": 30},
+        ]);
+
+        // Test 1: With double quotes
+        let path1 = r#"$[?(@.name == "item with's")].value"#;
+        eprintln!("Test 1 path: {}", path1);
+        match JsonPath::try_from(path1) {
+            Ok(jp) => {
+                let result = jp.find(&data);
+                eprintln!("Test 1 result: {:?}", result);
+            }
+            Err(e) => eprintln!("Test 1 parse error: {}", e),
+        }
+
+        // Test 2: With unescaped apostrophe (what we're trying)
+        let path2 = "$[?(@.name == 'item with's')].value";
+        eprintln!("Test 2 path: {}", path2);
+        match JsonPath::try_from(path2) {
+            Ok(jp) => {
+                let result = jp.find(&data);
+                eprintln!("Test 2 result: {:?}", result);
+            }
+            Err(e) => eprintln!("Test 2 parse error: {}", e),
+        }
+
+        // Test 3: Match without apostrophe
+        let path3 = "$[?(@.name == 'plain item')].value";
+        eprintln!("Test 3 path: {}", path3);
+        match JsonPath::try_from(path3) {
+            Ok(jp) => {
+                let result = jp.find(&data);
+                eprintln!("Test 3 result: {:?}", result);
+                if let Value::Array(arr) = result {
+                    assert_eq!(arr.len(), 1, "Should find plain item");
+                }
+            }
+            Err(e) => eprintln!("Test 3 parse error: {}", e),
+        }
+    }
+
+    #[test]
     fn test_jsonpath_simple_dot_traversal() {
         use jsonpath_rust::JsonPath;
 
@@ -595,5 +791,96 @@ mod tests {
         // Should restore to original value
         assert!(restored.contains("Bob's item"));
         assert!(!restored.contains("__APOSTROPHE_"));
+    }
+
+    #[test]
+    fn test_preprocess_query_apostrophes_simple() {
+        let path = "[?(@.name == 'item with\\'s')].value";
+        let (processed, map) = preprocess_query_apostrophes(path);
+
+        // Should extract the apostrophe string and replace with placeholder
+        assert!(processed.contains("__APSTR_"));
+        assert!(!processed.contains("\\'"));
+        assert_eq!(map.len(), 1);
+
+        // Map should contain: placeholder -> "item with's"
+        let original_val = map.values().next().unwrap();
+        assert_eq!(original_val, "item with's");
+    }
+
+    #[test]
+    fn test_preprocess_query_apostrophes_multiple() {
+        let path = "data[?(@.desc == 'Mary\\'s and John\\'s')].id";
+        let (processed, map) = preprocess_query_apostrophes(path);
+
+        assert!(processed.contains("__APSTR_"));
+        assert_eq!(map.len(), 1);
+        let original_val = map.values().next().unwrap();
+        assert_eq!(original_val, "Mary's and John's");
+    }
+
+    #[test]
+    fn test_replace_and_restore_apostrophes() {
+        let (path, map) =
+            preprocess_query_apostrophes("[?(@.name == 'it\\'s Bob\\'s item')].value");
+
+        let mut data = json!([
+            {"name": "it's Bob's item", "value": 1},
+            {"name": "plain item", "value": 2},
+        ]);
+
+        replace_apostrophes_in_data_with_placeholders(&mut data, &map);
+        // After replacement, the value should be a placeholder
+        assert!(data[0]["name"].is_string());
+        let replaced_val = data[0]["name"].as_str().unwrap();
+        assert!(replaced_val.contains("__APSTR_"));
+
+        // Now restore
+        restore_apostrophes_in_results(&mut data, &map);
+        assert_eq!(data[0]["name"], "it's Bob's item");
+    }
+
+    #[test]
+    fn test_apostrophe_matching_with_jsonpath() {
+        use jsonpath_rust::JsonPath;
+
+        // Simulate full flow: preprocess query, replace data, run query, restore results
+        let path = "$[?(@.name == 'item with\\'s')].value";
+        let (processed_path, map) = preprocess_query_apostrophes(path);
+
+        eprintln!("Original path: {}", path);
+        eprintln!("Processed path: {}", processed_path);
+        eprintln!("Map: {:?}", map);
+
+        let mut data = json!([
+            {"name": "item with's", "value": 10},
+            {"name": "plain item", "value": 20},
+            {"name": "item with's", "value": 30},
+        ]);
+
+        replace_apostrophes_in_data_with_placeholders(&mut data, &map);
+        eprintln!("Data after replacement: {}", data.to_string());
+
+        // Now try to query
+        match JsonPath::try_from(processed_path.as_str()) {
+            Ok(jp) => {
+                let result = jp.find(&data);
+                eprintln!("Query result: {:?}", result);
+
+                if let Value::Array(mut arr) = result {
+                    for val in &mut arr {
+                        restore_apostrophes_in_results(val, &map);
+                    }
+                    eprintln!("After restore: {:?}", arr);
+                    assert_eq!(arr.len(), 2, "Should find 2 matches");
+                    assert_eq!(arr[0], json!(10));
+                    assert_eq!(arr[1], json!(30));
+                }
+            }
+            Err(e) => {
+                eprintln!("Parse error: {}", e);
+                panic!("Failed to parse processed path: {}", e);
+            }
+        }
     }
 }
