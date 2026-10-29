@@ -42,6 +42,64 @@ Notes
 
 ## Publish
 
+### Linux wheel automation (maintainer setup required)
+
+`.github/workflows/linux-wheels.yml` adds **manual, opt-in** builds on native
+Ubuntu 24.04 x86_64 and aarch64 runners. It uses their already-installed Rust
+compiler directly, not rustup or a Python build backend that bootstraps Rust.
+Cargo downloads the committed lock through Socket, then compiles/tests offline.
+Python build/test tools resolve through Socket with a seven-day release floor,
+native generated hashes and binary-only installation. No package downloads use
+public PyPI/crates.io, and no repository credentials are exposed to PRs or forks.
+
+This first target is **CPython 3.8+ stable ABI, glibc 2.39+**
+(`cp38-abi3-manylinux_2_39_x86_64` and `..._aarch64`). It supports Debian 13 and
+Ubuntu 24.04, **not** older glibc, musl/Alpine, PyPy or free-threaded CPython.
+Maturin audits the explicit manylinux compatibility target; it must fail rather
+than mislabel an incompatible wheel. Older Linux support would require a
+separately approved/provisioned build image, not an automatic Rust download.
+
+The workflow installs each wheel offline into Python 3.8 through 3.14 on both
+architectures and runs the existing pytest suite plus release-guard tests.
+Only artifacts from that same workflow commit, with matching versions and
+hashes, can be published. No source archive is published by this workflow.
+Compiler details and the hash-pinned Python tool resolution accompany artifacts.
+
+Before enabling it, the repository owner must:
+
+1. Review the workflow and the native runner/toolchain and glibc baseline.
+2. Create a protected `wheel-build` environment with approved, narrowly scoped
+   `SOCKET_FIREWALL_USERNAME` and `SOCKET_FIREWALL_PASSWORD` secrets. Do not reuse
+   Sure AWS deployment credentials or grant this public repo AWS access.
+3. Set repository variable `WHEEL_BUILDS_ENABLED=true`. Missing Socket credentials
+   fail closed; there is no fallback to public package registries.
+4. Configure a protected `pypi` environment with required human approval and a
+   PyPI Trusted Publisher for owner `EricDalrymple91`, repository
+   `jsonpath-sleuth`, workflow `linux-wheels.yml`, environment `pypi`.
+   No long-lived PyPI API token is used.
+5. Only after a successful build/test-only run, set `WHEEL_PUBLISH_ENABLED=true`.
+   Manually dispatch on `main` with `publish=true` and approve the publishing
+   environment. The default is build/test only; publishing must be explicit.
+
+This PR does not configure secrets/environments, create a publisher, bump a
+version, run a release or change Rust/Python runtime code. Existing PyPI artifacts
+cannot be overwritten. Choose a new package version if the intended filenames
+already exist, keeping Cargo and Python versions aligned.
+
+For Document Center adoption, compare upstream against its slimmed vendored
+implementation and validate the stored JSONPath corpus before changing the app.
+Installing a wheel must not silently fall back to source: consumers should use
+their approved Socket/private index and require a binary for `jsonpath-sleuth`.
+
+Run release-guard tests with the existing pytest tooling:
+
+```bash
+python -m pytest -q tests/test_wheel_release.py
+```
+
+The manual commands below are the original upstream publishing instructions,
+not the Socket-routed automation described above.
+
 - Build wheels + sdist
   - `maturin build -m Cargo.toml --features python --release --sdist`
 
